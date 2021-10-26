@@ -1,11 +1,13 @@
 import tensorflow as tf
-from tensorflow.keras.layers import BatchNormalization, Activation, Conv2D, Add, Input, Flatten, AveragePooling2D, Reshape, Permute
+from tensorflow.keras import Model
+from tensorflow.keras.layers import Dense, BatchNormalization, Activation, Conv2D, Add, Input, Flatten, AveragePooling2D, Reshape, Permute
+from keras_multi_head import MultiHead
 
-class mimo_resnet2810():
+class mimo_resnet2810(object):
     def __init__(self):
         pass
 
-    def resnet_block(self, inputs, filters,  strides, n_blocks):
+    def block(self, inputs, filters,  strides, n_blocks):
         """
         https://paperswithcode.com/method/residual-block
 
@@ -46,7 +48,7 @@ class mimo_resnet2810():
 
         return x
 
-    def build_resnet(self, input_shape, K, M):
+    def build(self, input_shape, K, M):
         """
         https://arxiv.org/pdf/1605.07146.pdf
         https://paperswithcode.com/paper/wide-residual-networks
@@ -60,25 +62,33 @@ class mimo_resnet2810():
         returns:
             tf.keras.Model
         """
-
-        inputs = Input(shape=list(input_shape))
+        input_shape = list(input_shape)
+        inputs = Input(shape=input_shape)
         # dim_1 -> dim_2, dim_2 -> dim_3, dim_3 -> dim_4, dim_4 -> dim_1
         # where dim_1 = size of ensemble, dim_2 = width, dim_3 = heigh, dim_4 = channels
         x = Permute([2,3,4,1])(inputs)
-        x = Reshape(input_shape[1:-1] + input_shape[-1] * M)(x)
-        x = Conv2D(filters=16, strides=1)(x)
+        x = Reshape(input_shape[1:-1] + [input_shape[-1] * M])(x)
+        x = Conv2D(filters=16, strides=1,kernel_size=3, padding='same', use_bias=False, kernel_initializer='he_normal')(x)
 
         # We fit 4 resnet blocks to get a total network depth of 24
         # The filters are multiplied with 10 for the width multiplier
-        x = self.resnet_block(x, filters=160, strides=1, n_blocks=4)
-        x = self.resnet_block(x, filters=320, strides=2, n_blocks=4)
-        x = self.resnet_block(x, filters=640, strides=2, n_blocks=4)
+        x = self.block(x, filters=160, strides=1, n_blocks=4)
+        x = self.block(x, filters=320, strides=2, n_blocks=4)
+        x = self.block(x, filters=640, strides=2, n_blocks=4)
 
         x = BatchNormalization()(x)
         x = Activation('relu')(x)
         x = Flatten()(x)
-        
+
+        x = MultiHead(Dense(units=K, kernel_initializer='he_normal', activation=None), layer_num=M)(x)
+
+        return Model(inputs=inputs, outputs=x)
 
 if __name__ == '__main__':
     print(tf.__version__)
 
+    model = mimo_resnet2810()
+    
+    model.build(input_shape=(5,5,5,3),K=5,M=5)
+
+    print(model)

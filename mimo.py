@@ -1,6 +1,6 @@
 import tensorflow as tf
 from tensorflow.keras import Model
-from tensorflow.keras.layers import Dense, BatchNormalization, Activation, Conv2D, Add, Input, Flatten, AveragePooling2D, Reshape, Permute
+from tensorflow.keras.layers import Dense, BatchNormalization, Activation, Conv2D, add, Input, Flatten, AveragePooling2D, Reshape, Permute
 from keras_multi_head import MultiHead
 
 class mimo_resnet2810(object):
@@ -25,26 +25,33 @@ class mimo_resnet2810(object):
         x = inputs
         y = inputs
 
-        y = BatchNormalization(momentum=0.99, epsilon=0.001)
+        y = BatchNormalization(momentum=0.99, epsilon=0.001)(y)
         y = Activation('relu')(y)
-        y = Conv2D(filters=filters,strides=strides, kernel_size=3, padding='same', use_bias=False, kernel_initializer='he_normal')
-        y = BatchNormalization(momentum=0.99, epsilon=0.001)
+        y = Conv2D(filters=filters,strides=strides, kernel_size=3, padding='same', use_bias=False, kernel_initializer='he_normal')(y)
+        y = BatchNormalization(momentum=0.99, epsilon=0.001)(y)
         y = Activation('relu')(y)
-        y = Conv2D(filters=filters, strides=1, kernel_size=3, padding='same', use_bias=False, kernel_initializer='he_normal')
+        y = Conv2D(filters=filters, strides=1, kernel_size=3, padding='same', use_bias=False, kernel_initializer='he_normal')(y)
 
-        x = Add([x,y])
+        if not x.shape.is_compatible_with(y.shape):
+            x = Conv2D(filters=filters, strides=strides, kernel_size=1, padding='same', use_bias=False, kernel_initializer='he_normal')(x)
+
+        x = add([x,y])
 
         for i in range(n_blocks-1):
+            x = x
             y = x
 
-            y = BatchNormalization(momentum=0.99,epsilon=0.001)
+            y = BatchNormalization(momentum=0.99,epsilon=0.001)(y)
             y = Activation('relu')(y)
-            y = Conv2D(filters=filters,strides=1, kernel_size=3, padding='same',use_bias=False, kernel_initializer='he_normal')
-            y = BatchNormalization(momentum=0.99,epsilon=0.001)
+            y = Conv2D(filters=filters,strides=1, kernel_size=3, padding='same',use_bias=False, kernel_initializer='he_normal')(y)
+            y = BatchNormalization(momentum=0.99,epsilon=0.001)(y)
             y = Activation('relu')(y)
-            y = Conv2D(filters=filters,strides=1, kernel_size=3, padding='same',use_bias=False, kernel_initializer='he_normal')
+            y = Conv2D(filters=filters,strides=1, kernel_size=3, padding='same',use_bias=False, kernel_initializer='he_normal')(y)
 
-            x = Add([x,y])
+            if not x.shape.is_compatible_with(y.shape):
+                x = Conv2D(filters=filters, strides=strides, kernel_size=1, padding='same', use_bias=False, kernel_initializer='he_normal')(x)
+
+            x = add([x,y])
 
         return x
 
@@ -68,7 +75,7 @@ class mimo_resnet2810(object):
         # where dim_1 = size of ensemble, dim_2 = width, dim_3 = heigh, dim_4 = channels
         x = Permute([2,3,4,1])(inputs)
         x = Reshape(input_shape[1:-1] + [input_shape[-1] * M])(x)
-        x = Conv2D(filters=16, strides=1,kernel_size=3, padding='same', use_bias=False, kernel_initializer='he_normal')(x)
+        x = Conv2D(filters=16, strides=1, kernel_size=3, padding='same', use_bias=False, kernel_initializer='he_normal')(x)
 
         # We fit 4 resnet blocks to get a total network depth of 24
         # The filters are multiplied with 10 for the width multiplier

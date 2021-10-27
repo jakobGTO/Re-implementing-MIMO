@@ -92,8 +92,8 @@ class MIMO_ResNet28_10(object):
         return Model(inputs=inputs, outputs=x)
 
     @tf.function
-    def train_step():
-        
+    def train_step(x_train, labels ):
+
         return None
 
     def train():

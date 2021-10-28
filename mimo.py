@@ -32,8 +32,7 @@ class MIMO_ResNet28_10(object):
         x = Activation('relu')(x)
         x = Conv2D(filters=filters, strides=(1,1), kernel_size=(3,3), padding='same', use_bias=False, kernel_initializer='he_normal')(x)
 
-        if not x.shape.is_compatible_with(x_skip.shape):
-            x_skip = Conv2D(filters=filters, strides=(strides,strides), kernel_size=(1,1), padding='same', use_bias=False, kernel_initializer='he_normal')(x_skip)
+        x_skip = Conv2D(filters=filters, strides=(strides,strides), kernel_size=(1,1), padding='same', use_bias=False, kernel_initializer='he_normal')(x_skip)
 
         x = Add()([x,x_skip])
 
@@ -46,9 +45,6 @@ class MIMO_ResNet28_10(object):
             x = BatchNormalization(momentum=0.99,epsilon=0.001)(x)
             x = Activation('relu')(x)
             x = Conv2D(filters=filters,strides=(1,1), kernel_size=(3,3), padding='same',use_bias=False, kernel_initializer='he_normal')(x)
-
-            if not x.shape.is_compatible_with(x_skip.shape):
-                x_skip = Conv2D(filters=filters, strides=(strides,strides), kernel_size=(1,1), padding='same', use_bias=False, kernel_initializer='he_normal')(x_skip)
 
             x = Add()([x,x_skip])
 
@@ -68,7 +64,7 @@ class MIMO_ResNet28_10(object):
         returns:
             tf.keras.Model
         """
-        
+
         input_shape = list(input_shape)
         inputs = Input(shape=input_shape)
         # dim_1 -> dim_2, dim_2 -> dim_3, dim_3 -> dim_4, dim_4 -> dim_1
@@ -79,8 +75,11 @@ class MIMO_ResNet28_10(object):
 
         # We fit 4 resnet blocks to get a total network depth of 24
         # The filters are multiplied with 10 for the width multiplier
+        print('call1')
         x = self.block(x, filters=160, strides=1)
+        print('call2')
         x = self.block(x, filters=320, strides=2)
+        print('call3')
         x = self.block(x, filters=640, strides=2)
 
         x = BatchNormalization()(x)

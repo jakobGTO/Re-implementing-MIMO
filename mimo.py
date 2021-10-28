@@ -75,11 +75,8 @@ class MIMO_ResNet28_10(object):
 
         # We fit 4 resnet blocks to get a total network depth of 24
         # The filters are multiplied with 10 for the width multiplier
-        print('call1')
         x = self.block(x, filters=160, strides=1)
-        print('call2')
         x = self.block(x, filters=320, strides=2)
-        print('call3')
         x = self.block(x, filters=640, strides=2)
 
         x = BatchNormalization()(x)

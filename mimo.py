@@ -8,7 +8,7 @@ class MIMO_ResNet28_10(object):
     def __init__(self):
         pass
 
-    def block(self, inputs, filters,  strides, n_blocks):
+    def block(self, inputs, filters,  strides):
         """
         https://paperswithcode.com/method/residual-block
 
@@ -37,7 +37,7 @@ class MIMO_ResNet28_10(object):
 
         x = Add()([x,x_skip])
 
-        for i in range(n_blocks-1):
+        for i in range(3):
             x_skip,x = x,x
 
             x = BatchNormalization(momentum=0.99,epsilon=0.001)(x)
@@ -68,6 +68,7 @@ class MIMO_ResNet28_10(object):
         returns:
             tf.keras.Model
         """
+        
         input_shape = list(input_shape)
         inputs = Input(shape=input_shape)
         # dim_1 -> dim_2, dim_2 -> dim_3, dim_3 -> dim_4, dim_4 -> dim_1
@@ -78,9 +79,9 @@ class MIMO_ResNet28_10(object):
 
         # We fit 4 resnet blocks to get a total network depth of 24
         # The filters are multiplied with 10 for the width multiplier
-        x = self.block(x, filters=160, strides=1, n_blocks=4)
-        x = self.block(x, filters=320, strides=2, n_blocks=4)
-        x = self.block(x, filters=640, strides=2, n_blocks=4)
+        x = self.block(x, filters=160, strides=1)
+        x = self.block(x, filters=320, strides=2)
+        x = self.block(x, filters=640, strides=2)
 
         x = BatchNormalization()(x)
         x = Activation('relu')(x)
@@ -93,7 +94,6 @@ class MIMO_ResNet28_10(object):
 
     @tf.function
     def train_step(x_train, labels ):
-
         return None
 
     def fit():
@@ -109,5 +109,3 @@ if __name__ == '__main__':
     mimo = MIMO_ResNet28_10()
     model = mimo.build(input_shape=(5,32,32,3),K=5,M=5)
     model.summary()
-
-    print(x_train.shape)

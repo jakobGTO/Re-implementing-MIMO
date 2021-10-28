@@ -73,7 +73,6 @@ class MIMO_ResNet28_10(object):
         x = Reshape(input_shape[1:-1] + [input_shape[-1] * M])(x)
         x = Conv2D(filters=16, strides=(1,1), kernel_size=(3,3), padding='same', use_bias=False, kernel_initializer='he_normal')(x)
 
-        # We fit 4 resnet blocks to get a total network depth of 24
         # The filters are multiplied with 10 for the width multiplier
         x = self.block(x, filters=160, strides=1)
         x = self.block(x, filters=320, strides=2)
@@ -89,7 +88,7 @@ class MIMO_ResNet28_10(object):
         return Model(inputs=inputs, outputs=x)
 
     @tf.function
-    def train_step(x_train, labels ):
+    def train_step():
         return None
 
     def fit():

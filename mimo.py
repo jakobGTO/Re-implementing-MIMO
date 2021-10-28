@@ -96,7 +96,7 @@ class MIMO_ResNet28_10(object):
 
         return None
 
-    def train():
+    def fit():
         return None
 
     

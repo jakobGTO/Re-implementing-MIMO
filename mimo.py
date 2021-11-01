@@ -7,6 +7,46 @@ from tensorflow.keras.losses import sparse_categorical_crossentropy
 from keras_multi_head import MultiHead
 import numpy as np
 
+# TODO(trandustin): Move into ed.layers.
+class DenseMultihead(tf.keras.layers.Dense):
+  """Multiheaded output layer."""
+
+  def __init__(self,
+               units,
+               ensemble_size=1,
+               activation=None,
+               use_bias=True,
+               kernel_initializer='glorot_uniform',
+               bias_initializer='zeros',
+               kernel_regularizer=None,
+               bias_regularizer=None,
+               activity_regularizer=None,
+               kernel_constraint=None,
+               bias_constraint=None,
+               **kwargs):
+    super().__init__(
+        units=units * ensemble_size,
+        activation=activation,
+        use_bias=use_bias,
+        kernel_initializer=kernel_initializer,
+        bias_initializer=bias_initializer,
+        kernel_regularizer=kernel_regularizer,
+        bias_regularizer=bias_regularizer,
+        activity_regularizer=activity_regularizer,
+        kernel_constraint=kernel_constraint,
+        bias_constraint=bias_constraint,
+        **kwargs)
+    self.ensemble_size = ensemble_size
+
+  def call(self, inputs):
+    batch_size = tf.shape(inputs)[0]
+    # NOTE: This restricts this layer from being called on tensors of ndim > 2.
+    outputs = super().call(inputs)
+    outputs = tf.reshape(outputs, [batch_size,
+                                   self.ensemble_size,
+                                   self.units // self.ensemble_size])
+    return outputs
+
 
 class MIMO_ResNet28_10(Model):
     def __init__(self):
@@ -15,9 +55,7 @@ class MIMO_ResNet28_10(Model):
     def block(self, inputs, filters,  strides):
         """
         https://paperswithcode.com/method/residual-block
-
         Build ResNet-28-10 Blocks and group them
-
         args:
             inputs: tf.tensor. 2D Conv layer
             filters: int. Number of filters in the 2D Conv Layer
@@ -58,9 +96,7 @@ class MIMO_ResNet28_10(Model):
         """
         https://arxiv.org/pdf/1605.07146.pdf
         https://paperswithcode.com/paper/wide-residual-networks
-
         Build ResNet-28-10 Model
-
         args:
             input_shape: tf.tensor. Input shape (M, img width, img height, channels)
             K: int. number of classes of the dataset 
@@ -87,18 +123,23 @@ class MIMO_ResNet28_10(Model):
         x = AveragePooling2D(pool_size=8)(x)
         x = Flatten()(x)
 
-        x = MultiHead(Dense(units=K, kernel_initializer='he_normal', activation=None), layer_num=M)(x)
+        x = DenseMultihead(
+            K,
+            kernel_initializer='he_normal',
+            activation=None,
+            ensemble_size=M)(x)
+
 
         return Model(inputs=inputs, outputs=x)
 
     @tf.function
-    def train_step(self, data):
+    def train_step(self, x, y):
         ''' Adapted from https://keras.io/guides/customizing_what_happens_in_fit/ '''
-        x, y = data
         with tf.GradientTape() as tape:
-            logits = self(x, training=True)
-            trainable_vars = self.trainable_variables
-            loss = self.compiled_loss(y, logits, trainable_vars)
+            logits = model(x, training=True)
+            trainable_vars = model.trainable_variables
+            loss = custom_loss(y, logits)
+            
         gradients = tape.gradient(loss, trainable_vars)
         self.optimizer.apply_gradients(zip(gradients, trainable_vars))
         self.compiled_metrics.update_state(y, logits)
@@ -114,30 +155,26 @@ class MIMO_ResNet28_10(Model):
         return {m.name: m.result() for m in self.metrics}
 
 
-def custom_loss(y_true, y_pred, trainable_variables):
+def custom_loss(y_true, y_pred):
     ''' Loss function as described in Section 2 of original paper '''
     negative_likelihood = tf.reduce_mean(
                 tf.reduce_sum(sparse_categorical_crossentropy(
                     y_true, y_pred, from_logits=True), axis=1))
-    lossL2 = tf.add_n([tf.nn.l2_loss(v) for v in trainable_variables if 'bias' not in v.name]) * 3e-4
-    return negative_likelihood + lossL2
-
+    #lossL2 = tf.add_n([tf.nn.l2_loss(v) for v in trainable_variables if 'bias' not in v.name]) * 3e-4
+    return negative_likelihood #+ lossL2
 
 if __name__ == '__main__':
     print(tf.__version__)
 
     # Data handling
     (x_train, y_train), (x_test, y_test) = cifar10.load_data()
-    y_train = to_categorical(y_train, num_classes=10)
-    y_test = to_categorical(y_test, num_classes=10)
-    x_train = np.reshape(x_train, (50000, 3072))
-    x_test = np.reshape(x_test, (10000, 3072))
     x_train = x_train.astype('float32')
     x_test = x_test.astype('float32')
     x_train /= 255
     x_test /= 255
-    train_dataset = tf.data.Dataset.from_tensor_slices((x_train, y_train))
-    train_dataset = train_dataset.shuffle(buffer_size=1024).batch(512)
+    x = np.repeat(x_train[:,np.newaxis,:,:,:], 5, axis=1)
+    y = np.repeat(y_train[:,np.newaxis,:], 5, axis=1)
+
 
     # Set optimizer, adapted from https://keras.io/api/optimizers/ and with
     # hyperparameters described in Annex B of the original paper.
@@ -146,9 +183,10 @@ if __name__ == '__main__':
     optimizer = tf.keras.optimizers.SGD(
         learning_rate=lr_schedule, nesterov=True)
 
+
     mimo = MIMO_ResNet28_10()
-    model = mimo.build(input_shape=(5, 32, 32, 3), K=5, M=5)
-    model.summary()
+    model = mimo.build(input_shape=(5, 32, 32, 3), K=10, M=5)
+
     model.compile(optimizer=optimizer, loss=custom_loss)
-    model.fit(train_dataset, epochs=250)
-    model.evaluate(x_test, y_test)
+    model.fit(x, y, batch_size=24, epochs=10)
+    #model.evaluate(x_test, y_test)

@@ -4,49 +4,18 @@ from tensorflow.keras.layers import Dense, BatchNormalization, Activation, Conv2
 from tensorflow.keras.datasets import cifar10, cifar100
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.losses import sparse_categorical_crossentropy
-from keras_multi_head import MultiHead
 import numpy as np
 
-# TODO(trandustin): Move into ed.layers.
-class DenseMultihead(tf.keras.layers.Dense):
-  """Multiheaded output layer."""
+class CustomLayer(Dense):
+    """Adapted from https://keras.io/guides/making_new_layers_and_models_via_subclassing/"""
+    def __init__(self, units, M, kernel_initializer='he_normal'):
+        super().__init__(units=units, kernel_initializer=kernel_initializer)
+        self.M = M
 
-  def __init__(self,
-               units,
-               ensemble_size=1,
-               activation=None,
-               use_bias=True,
-               kernel_initializer='glorot_uniform',
-               bias_initializer='zeros',
-               kernel_regularizer=None,
-               bias_regularizer=None,
-               activity_regularizer=None,
-               kernel_constraint=None,
-               bias_constraint=None,
-               **kwargs):
-    super().__init__(
-        units=units * ensemble_size,
-        activation=activation,
-        use_bias=use_bias,
-        kernel_initializer=kernel_initializer,
-        bias_initializer=bias_initializer,
-        kernel_regularizer=kernel_regularizer,
-        bias_regularizer=bias_regularizer,
-        activity_regularizer=activity_regularizer,
-        kernel_constraint=kernel_constraint,
-        bias_constraint=bias_constraint,
-        **kwargs)
-    self.ensemble_size = ensemble_size
-
-  def call(self, inputs):
-    batch_size = tf.shape(inputs)[0]
-    # NOTE: This restricts this layer from being called on tensors of ndim > 2.
-    outputs = super().call(inputs)
-    outputs = tf.reshape(outputs, [batch_size,
-                                   self.ensemble_size,
-                                   self.units // self.ensemble_size])
-    return outputs
-
+    def call(self, inputs):
+        x = super().call(inputs)
+        x = tf.reshape(x, (tf.shape(inputs)[0], self.M, self.units // self.M))
+        return x
 
 class MIMO_ResNet28_10(Model):
     def __init__(self):
@@ -123,12 +92,7 @@ class MIMO_ResNet28_10(Model):
         x = AveragePooling2D(pool_size=8)(x)
         x = Flatten()(x)
 
-        x = DenseMultihead(
-            K,
-            kernel_initializer='he_normal',
-            activation=None,
-            ensemble_size=M)(x)
-
+        x = CustomLayer(units=K*M, kernel_initializer='he_normal', M=M)(x)
 
         return Model(inputs=inputs, outputs=x)
 

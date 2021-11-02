@@ -110,9 +110,8 @@ class MIMO_ResNet28_10(Model):
         return {m.name: m.result() for m in self.metrics}
 
     @tf.function
-    def test_step(self, data):
+    def test_step(self, x, y):
         ''' Adapted from https://keras.io/guides/customizing_what_happens_in_fit/ '''
-        x, y = data
         y_pred = self(x, training=False)
         self.compiled_loss(y, y_pred, regularization_losses=self.losses)
         self.compiled_metrics.update_state(y, y_pred)
@@ -136,10 +135,22 @@ if __name__ == '__main__':
     x_test = x_test.astype('float32')
     x_train /= 255
     x_test /= 255
-    x = np.repeat(x_train[:,np.newaxis,:,:,:], 5, axis=1)
-    y = np.repeat(y_train[:,np.newaxis,:], 5, axis=1)
+    M = 3
 
+    # At train time pass random image through each node
+    x_train = np.repeat(x_train[:,np.newaxis,:,:,:], M, axis=1)
+    y_train = np.repeat(y_train[:,np.newaxis,:], M, axis=1)
 
+    idx = np.arange(x_train.shape[0])
+    shuffled_idx = np.random.permutation(x_train.shape[0])
+    x_train = x_train[shuffled_idx,:,:,:,:] 
+    y_train = y_train[shuffled_idx,:,:]
+
+    # At test time pass same image through all input nodes
+    y_test_oldshape = y_test
+    x_test = np.repeat(x_test[:,np.newaxis,:,:,:], M, axis=1)
+    y_test = np.repeat(y_test[:,np.newaxis,:], M, axis=1)
+    
     # Set optimizer, adapted from https://keras.io/api/optimizers/ and with
     # hyperparameters described in Annex B of the original paper.
     lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
@@ -147,10 +158,24 @@ if __name__ == '__main__':
     optimizer = tf.keras.optimizers.SGD(
         learning_rate=lr_schedule, nesterov=True)
 
+    # Define model and fit model
+    K = 10
+    input_shape=(x_train.shape[1:])
 
     mimo = MIMO_ResNet28_10()
-    model = mimo.build(input_shape=(5, 32, 32, 3), K=10, M=5)
+    model = mimo.build(input_shape=input_shape, K=K, M=M)
 
     model.compile(optimizer=optimizer, loss=custom_loss)
-    model.fit(x, y, batch_size=24, epochs=10)
-    #model.evaluate(x_test, y_test)
+    model.fit(x_train, y_train, batch_size=16, epochs=33, shuffle=True)
+    results = model.evaluate(x_test, y_test, batch_size=16)
+    preds = model.predict(x_test)
+
+    # Get prediction for each subnetwork and average them
+    pred_sum = preds[:,0,:].copy()
+    for i in range(1,M):
+        pred_sum += preds[:,i,:]
+    
+    pred_avg = pred_sum / M
+
+    print('Test loss: ',results)
+    print('Print test acc: ',np.sum(pred_avg.argmax(axis=1) == y_test_oldshape.flatten()) / y_test_oldshape.shape[0])

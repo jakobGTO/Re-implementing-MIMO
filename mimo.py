@@ -17,10 +17,10 @@ class CustomLayer(Dense):
         x = tf.reshape(x, (tf.shape(inputs)[0], self.M, self.units // self.M))
         return x
 
-class MIMO_ResNet28_10(Model):
+class ResNet20_10():
     def __init__(self):
-        super(MIMO_ResNet28_10, self).__init__()
-
+        pass
+        
     def block(self, inputs, filters,  strides):
         """
         https://paperswithcode.com/method/residual-block
@@ -33,7 +33,6 @@ class MIMO_ResNet28_10(Model):
         returns:
             tf.tensor
         """
-
         x_skip, x = inputs, inputs
 
         x = BatchNormalization(momentum=0.99, epsilon=0.001)(x)
@@ -73,7 +72,6 @@ class MIMO_ResNet28_10(Model):
         returns:
             tf.keras.Model
         """
-
         input_shape = list(input_shape)
         inputs = Input(shape=input_shape)
         # dim_1 -> dim_2, dim_2 -> dim_3, dim_3 -> dim_4, dim_4 -> dim_1
@@ -96,13 +94,19 @@ class MIMO_ResNet28_10(Model):
 
         return Model(inputs=inputs, outputs=x)
 
+class MIMO(Model):
+    def __init__(self, mimomodel):
+        super(MIMO, self).__init__()
+        self.mimomodel = mimomodel
+
     @tf.function
-    def train_step(self, x, y):
+    def train_step(self, data):
         ''' Adapted from https://keras.io/guides/customizing_what_happens_in_fit/ '''
+        x,y = data
         with tf.GradientTape() as tape:
-            logits = model(x, training=True)
-            trainable_vars = model.trainable_variables
-            loss = custom_loss(y, logits)
+            logits = self.mimomodel(x, training=True)
+            trainable_vars = self.mimomodel.trainable_variables
+            loss = custom_loss(y, logits, trainable_vars)
             
         gradients = tape.gradient(loss, trainable_vars)
         self.optimizer.apply_gradients(zip(gradients, trainable_vars))
@@ -110,23 +114,25 @@ class MIMO_ResNet28_10(Model):
         return {m.name: m.result() for m in self.metrics}
 
     @tf.function
-    def test_step(self, x, y):
+    def test_step(self, data):
         ''' Adapted from https://keras.io/guides/customizing_what_happens_in_fit/ '''
+        x,y = data
         y_pred = self(x, training=False)
         self.compiled_loss(y, y_pred, regularization_losses=self.losses)
         self.compiled_metrics.update_state(y, y_pred)
         return {m.name: m.result() for m in self.metrics}
 
 
-def custom_loss(y_true, y_pred):
+def custom_loss(y_true, y_pred, trainable_variables):
     ''' Loss function as described in Section 2 of original paper '''
     negative_likelihood = tf.reduce_mean(
                 tf.reduce_sum(sparse_categorical_crossentropy(
                     y_true, y_pred, from_logits=True), axis=1))
-    #lossL2 = tf.add_n([tf.nn.l2_loss(v) for v in trainable_variables if 'bias' not in v.name]) * 3e-4
-    return negative_likelihood #+ lossL2
+    lossL2 = tf.add_n([tf.nn.l2_loss(v) for v in trainable_variables if 'bias' not in v.name]) * 3e-4
+    return negative_likelihood + lossL2
 
 if __name__ == '__main__':
+    tf.config.run_functions_eagerly(True)
     print(tf.__version__)
 
     # Data handling
@@ -162,9 +168,10 @@ if __name__ == '__main__':
     K = 10
     input_shape=(x_train.shape[1:])
 
-    mimo = MIMO_ResNet28_10()
-    model = mimo.build(input_shape=input_shape, K=K, M=M)
+    resnet = ResNet20_10()
+    resnet_architecture = resnet.build(input_shape, K, M)
 
+    model = MIMO(resnet_architecture)
     model.compile(optimizer=optimizer, loss=custom_loss)
     model.fit(x_train, y_train, batch_size=16, epochs=33, shuffle=True)
     results = model.evaluate(x_test, y_test, batch_size=16)

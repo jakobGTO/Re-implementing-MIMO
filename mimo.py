@@ -157,8 +157,8 @@ if __name__ == '__main__':
     M = 3
 
     # At train time pass random image through each node
-    x_train = np.repeat(x_train[:50,np.newaxis,:,:,:], M, axis=1)
-    y_train = np.repeat(y_train[:50,np.newaxis,:], M, axis=1)
+    x_train = np.repeat(x_train[:,np.newaxis,:,:,:], M, axis=1)
+    y_train = np.repeat(y_train[:,np.newaxis,:], M, axis=1)
 
     idx = np.arange(x_train.shape[0])
     shuffled_idx = np.random.permutation(x_train.shape[0])
@@ -167,8 +167,8 @@ if __name__ == '__main__':
 
     # At test time pass same image through all input nodes
     y_test_oldshape = y_test
-    x_test = np.repeat(x_test[:50,np.newaxis,:,:,:], M, axis=1)
-    y_test = np.repeat(y_test[:50,np.newaxis,:], M, axis=1)
+    x_test = np.repeat(x_test[:,np.newaxis,:,:,:], M, axis=1)
+    y_test = np.repeat(y_test[:,np.newaxis,:], M, axis=1)
     
     # Set optimizer, adapted from https://keras.io/api/optimizers/ and with
     # hyperparameters described in Annex B of the original paper.

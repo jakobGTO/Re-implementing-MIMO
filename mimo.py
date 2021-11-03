@@ -1,3 +1,4 @@
+from os import name
 import tensorflow as tf
 from tensorflow.keras import Model
 from tensorflow.keras.layers import Dense, BatchNormalization, Activation, Conv2D, Add, Input, Flatten, AveragePooling2D, Reshape, Permute
@@ -5,6 +6,12 @@ from tensorflow.keras.datasets import cifar10, cifar100
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.losses import sparse_categorical_crossentropy
 import numpy as np
+from tensorflow.python.keras.metrics import SparseCategoricalAccuracy, Mean
+from robustness_metrics.metrics.uncertainty import ExpectedCalibrationError
+
+loss_tracker = Mean(name="neg_likelihood")
+accuracy = SparseCategoricalAccuracy(name="accuracy")
+ece_tracker = ExpectedCalibrationError(num_bins=10)
 
 class CustomLayer(Dense):
     """Adapted from https://keras.io/guides/making_new_layers_and_models_via_subclassing/"""
@@ -102,25 +109,31 @@ class MIMO(Model):
     @tf.function
     def train_step(self, data):
         ''' Adapted from https://keras.io/guides/customizing_what_happens_in_fit/ '''
-        x,y = data
+        x, y = data
+
         with tf.GradientTape() as tape:
             logits = self.mimomodel(x, training=True)
             trainable_vars = self.mimomodel.trainable_variables
-            loss = custom_loss(y, logits, trainable_vars)
-            
-        gradients = tape.gradient(loss, trainable_vars)
+            loss, loss_fn = custom_loss(y, logits, trainable_vars)
+        gradients = tape.gradient(loss_fn, trainable_vars)
         self.optimizer.apply_gradients(zip(gradients, trainable_vars))
-        self.compiled_metrics.update_state(y, logits)
-        return {m.name: m.result() for m in self.metrics}
+        loss_tracker.update_state(loss)
+        accuracy.update_state(y, logits)
+        # ece_tracker.add_batch(logits, y)
+        return {"neg_likelihood": loss_tracker.result(), "accuracy": accuracy.result()}
 
     @tf.function
     def test_step(self, data):
         ''' Adapted from https://keras.io/guides/customizing_what_happens_in_fit/ '''
-        x,y = data
+        x, y = data
         y_pred = self(x, training=False)
         self.compiled_loss(y, y_pred, regularization_losses=self.losses)
         self.compiled_metrics.update_state(y, y_pred)
         return {m.name: m.result() for m in self.metrics}
+
+    @property
+    def metrics(self):
+        return [loss_tracker, accuracy]
 
 
 def custom_loss(y_true, y_pred, trainable_variables):
@@ -129,7 +142,7 @@ def custom_loss(y_true, y_pred, trainable_variables):
                 tf.reduce_sum(sparse_categorical_crossentropy(
                     y_true, y_pred, from_logits=True), axis=1))
     lossL2 = tf.add_n([tf.nn.l2_loss(v) for v in trainable_variables if 'bias' not in v.name]) * 3e-4
-    return negative_likelihood + lossL2
+    return negative_likelihood, negative_likelihood+lossL2
 
 if __name__ == '__main__':
     tf.config.run_functions_eagerly(True)
@@ -144,8 +157,8 @@ if __name__ == '__main__':
     M = 3
 
     # At train time pass random image through each node
-    x_train = np.repeat(x_train[:,np.newaxis,:,:,:], M, axis=1)
-    y_train = np.repeat(y_train[:,np.newaxis,:], M, axis=1)
+    x_train = np.repeat(x_train[:50,np.newaxis,:,:,:], M, axis=1)
+    y_train = np.repeat(y_train[:50,np.newaxis,:], M, axis=1)
 
     idx = np.arange(x_train.shape[0])
     shuffled_idx = np.random.permutation(x_train.shape[0])
@@ -154,8 +167,8 @@ if __name__ == '__main__':
 
     # At test time pass same image through all input nodes
     y_test_oldshape = y_test
-    x_test = np.repeat(x_test[:,np.newaxis,:,:,:], M, axis=1)
-    y_test = np.repeat(y_test[:,np.newaxis,:], M, axis=1)
+    x_test = np.repeat(x_test[:50,np.newaxis,:,:,:], M, axis=1)
+    y_test = np.repeat(y_test[:50,np.newaxis,:], M, axis=1)
     
     # Set optimizer, adapted from https://keras.io/api/optimizers/ and with
     # hyperparameters described in Annex B of the original paper.
@@ -172,17 +185,17 @@ if __name__ == '__main__':
     resnet_architecture = resnet.build(input_shape, K, M)
 
     model = MIMO(resnet_architecture)
-    model.compile(optimizer=optimizer, loss=custom_loss)
+    model.compile(optimizer=optimizer)
     model.fit(x_train, y_train, batch_size=16, epochs=33, shuffle=True)
     results = model.evaluate(x_test, y_test, batch_size=16)
     preds = model.predict(x_test)
 
     # Get prediction for each subnetwork and average them
-    pred_sum = preds[:,0,:].copy()
-    for i in range(1,M):
-        pred_sum += preds[:,i,:]
-    
+    pred_sum = preds[:, 0, :].copy()
+    for i in range(1, M):
+        pred_sum += preds[:, i, :]
+
     pred_avg = pred_sum / M
 
-    print('Test loss: ',results)
+    print('Test loss: ', results)
     print('Print test acc: ',np.sum(pred_avg.argmax(axis=1) == y_test_oldshape.flatten()) / y_test_oldshape.shape[0])

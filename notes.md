@@ -11,3 +11,8 @@ In ResNet-X-Y, X defines the depth of the network and Y is the width multiplier,
 3. In resnet-28-10 use normal resnet blocks, in resnet-50 use bottleneck resnet blocks.
 4. Implement function to build the model with resnet architecture
 5. Implement train step and fit functions
+
+# Dependencies
+1. Tensorflow
+2. Numpy
+3. Robustness-metrics (source: https://github.com/google-research/robustness_metrics)

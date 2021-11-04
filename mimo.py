@@ -1,4 +1,3 @@
-from os import name
 import tensorflow as tf
 from tensorflow.keras import Model
 from tensorflow.keras.layers import Dense, BatchNormalization, Activation, Conv2D, Add, Input, Flatten, AveragePooling2D, Reshape, Permute
@@ -7,11 +6,11 @@ from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.losses import sparse_categorical_crossentropy
 import numpy as np
 from tensorflow.python.keras.metrics import SparseCategoricalAccuracy, Mean
-from robustness_metrics.metrics.uncertainty import ExpectedCalibrationError
+from robustness_metrics.metrics import ExpectedCalibrationError
 
 loss_tracker = Mean(name="neg_likelihood")
 accuracy = SparseCategoricalAccuracy(name="accuracy")
-ece_tracker = ExpectedCalibrationError(num_bins=10)
+ece_tracker = ExpectedCalibrationError()
 
 class CustomLayer(Dense):
     """Adapted from https://keras.io/guides/making_new_layers_and_models_via_subclassing/"""
@@ -110,39 +109,44 @@ class MIMO(Model):
     def train_step(self, data):
         ''' Adapted from https://keras.io/guides/customizing_what_happens_in_fit/ '''
         x, y = data
-
         with tf.GradientTape() as tape:
             logits = self.mimomodel(x, training=True)
             trainable_vars = self.mimomodel.trainable_variables
-            loss, loss_fn = custom_loss(y, logits, trainable_vars)
+            loss_fn = custom_loss(y, logits, trainable_vars)
         gradients = tape.gradient(loss_fn, trainable_vars)
         self.optimizer.apply_gradients(zip(gradients, trainable_vars))
-        loss_tracker.update_state(loss)
+        loss_tracker.update_state(loss_fn)
         accuracy.update_state(y, logits)
-        # ece_tracker.add_batch(logits, y)
-        return {"neg_likelihood": loss_tracker.result(), "accuracy": accuracy.result()}
+        ece_tracker.add_batch(logits, label=y)
+        return {"neg_likelihood": loss_tracker.result(), "accuracy": accuracy.result(), "ece": ece_tracker.result()["ece"]}
 
     @tf.function
     def test_step(self, data):
         ''' Adapted from https://keras.io/guides/customizing_what_happens_in_fit/ '''
         x, y = data
-        y_pred = self(x, training=False)
-        self.compiled_loss(y, y_pred, regularization_losses=self.losses)
-        self.compiled_metrics.update_state(y, y_pred)
-        return {m.name: m.result() for m in self.metrics}
+        y_pred = self.mimomodel(x, training=False)
+        loss = custom_loss(y, y_pred)
+        loss_tracker.update_state(loss)
+        accuracy.update_state(y, y_pred)
+        ece_tracker.add_batch(y_pred, label=y)
+        return {"neg_likelihood": loss_tracker.result(), "accuracy": accuracy.result(), "ece": ece_tracker.result()["ece"]}
 
-    @property
-    def metrics(self):
-        return [loss_tracker, accuracy]
+    # implement the call method
+    def call(self, inputs, *args, **kwargs):
+        return self.mimomodel(inputs)
 
 
-def custom_loss(y_true, y_pred, trainable_variables):
+def custom_loss(y_true, y_pred, trainable_variables=None):
     ''' Loss function as described in Section 2 of original paper '''
     negative_likelihood = tf.reduce_mean(
                 tf.reduce_sum(sparse_categorical_crossentropy(
                     y_true, y_pred, from_logits=True), axis=1))
-    lossL2 = tf.add_n([tf.nn.l2_loss(v) for v in trainable_variables if 'bias' not in v.name]) * 3e-4
-    return negative_likelihood, negative_likelihood+lossL2
+    if trainable_variables:
+        lossL2 = tf.add_n([tf.nn.l2_loss(v) for v in trainable_variables if 'bias' not in v.name]) * 3e-4
+        loss = negative_likelihood + lossL2
+    else:
+        loss = negative_likelihood
+    return loss
 
 if __name__ == '__main__':
     tf.config.run_functions_eagerly(True)
@@ -169,6 +173,7 @@ if __name__ == '__main__':
     y_test_oldshape = y_test
     x_test = np.repeat(x_test[:,np.newaxis,:,:,:], M, axis=1)
     y_test = np.repeat(y_test[:,np.newaxis,:], M, axis=1)
+
     
     # Set optimizer, adapted from https://keras.io/api/optimizers/ and with
     # hyperparameters described in Annex B of the original paper.
@@ -185,7 +190,7 @@ if __name__ == '__main__':
     resnet_architecture = resnet.build(input_shape, K, M)
 
     model = MIMO(resnet_architecture)
-    model.compile(optimizer=optimizer)
+    model.compile(optimizer=optimizer, metrics=[loss_tracker, accuracy, ece_tracker])
     model.fit(x_train, y_train, batch_size=16, epochs=33, shuffle=True)
     results = model.evaluate(x_test, y_test, batch_size=16)
     preds = model.predict(x_test)

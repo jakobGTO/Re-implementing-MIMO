@@ -108,6 +108,9 @@ class MIMO(Model):
         self.num_batch_reps = num_batch_reps
         self.M = M
 
+    def call(self, inputs, *args, **kwargs):
+        return self.mimomodel(inputs)
+
     @tf.function
     def train_step(self, data):
         ''' Adapted from https://keras.io/guides/customizing_what_happens_in_fit/ '''
@@ -122,9 +125,10 @@ class MIMO(Model):
         self.optimizer.apply_gradients(zip(gradients, trainable_vars))
         loss_tracker.update_state(loss)
         accuracy.update_state(targets, logits)
+        probs = tf.nn.softmax(logits)
+        ece_tracker.add_batch(probs, label=targets)
 
-        # ece_tracker.add_batch(logits, y)
-        return {"neg_likelihood": loss_tracker.result(), "accuracy": accuracy.result()}
+        return {"neg_likelihood": loss_tracker.result(), "accuracy": accuracy.result(), "ece": ece_tracker.result()["ece"]}
 
     @tf.function
     def test_step(self, data):
@@ -134,25 +138,36 @@ class MIMO(Model):
 
         y_pred = self.mimomodel(inputs, training=False)
         y_pred = np.array(y_pred)
+        targets = np.array(targets)
 
-        pred_sum = y_pred[:, 0, :].copy()
-        for i in range(1, M):
-            pred_sum += y_pred[:, i, :]
-
-        pred_avg = pred_sum / M
-
+        # Calculate loss (already averaged across output nodes)
         loss = custom_loss(targets, y_pred, False)
         loss_tracker.update_state(loss)
-        accuracy.update_state(targets, y_pred)
 
-        return {"neg_likelihood": loss_tracker.result(), "accuracy": accuracy.result()}
+        # Calculate average prediction across output nodes
+        pred_sum = y_pred[:, 0, :].copy()
+        for i in range(M):
+            pred_sum += y_pred[:, i, :]
+        pred_avg = pred_sum / M
+
+        # Reshape targets average prediction
+        sqz_targets = []
+        for i in range(targets.shape[0]):
+            sqz_targets.append(targets[i,0,0])
+        sqz_targets = np.array(sqz_targets)[:,np.newaxis]
+        
+        # Calculate average accuracy
+        accuracy.update_state(sqz_targets, pred_avg)
+
+        # Calculate average ece
+        probs = tf.nn.softmax(pred_avg)
+        ece_tracker.add_batch(probs, label=sqz_targets)
+
+        return {"neg_likelihood": loss_tracker.result(), "accuracy": accuracy.result(), "ece": ece_tracker.result()["ece"]}
 
     @property
     def metrics(self):
         return [loss_tracker, accuracy]
-
-    def call(self, inputs, *args, **kwargs):
-        return self.mimomodel(inputs)
 
 
 def custom_loss(y_true, y_pred, trainable_variables):

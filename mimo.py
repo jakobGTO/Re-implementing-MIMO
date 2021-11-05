@@ -7,10 +7,21 @@ from tensorflow.keras.losses import sparse_categorical_crossentropy
 import numpy as np
 from tensorflow.python.keras.metrics import SparseCategoricalAccuracy, Mean
 from robustness_metrics.metrics import ExpectedCalibrationError
+from matplotlib import pyplot as plt
 
 loss_tracker = Mean(name="neg_likelihood")
 accuracy = SparseCategoricalAccuracy(name="accuracy")
 ece_tracker = ExpectedCalibrationError()
+
+def plot_metric(history, metric, ylabel, title):
+    plt.plot(history.history[metric])
+    plt.plot(history.history['val_' + metric])
+    plt.title(title)
+    plt.ylabel(ylabel)
+    plt.xlabel('epoch')
+    plt.legend(['train', 'val'], loc='upper left')
+    plt.show()
+
 
 class CustomLayer(Dense):
     """Adapted from https://keras.io/guides/making_new_layers_and_models_via_subclassing/"""
@@ -161,8 +172,8 @@ if __name__ == '__main__':
     M = 3
 
     # At train time pass random image through each node
-    x_train = np.repeat(x_train[:,np.newaxis,:,:,:], M, axis=1)
-    y_train = np.repeat(y_train[:,np.newaxis,:], M, axis=1)
+    x_train = np.repeat(x_train[:50,np.newaxis,:,:,:], M, axis=1)
+    y_train = np.repeat(y_train[:50,np.newaxis,:], M, axis=1)
 
     idx = np.arange(x_train.shape[0])
     shuffled_idx = np.random.permutation(x_train.shape[0])
@@ -171,8 +182,8 @@ if __name__ == '__main__':
 
     # At test time pass same image through all input nodes
     y_test_oldshape = y_test
-    x_test = np.repeat(x_test[:,np.newaxis,:,:,:], M, axis=1)
-    y_test = np.repeat(y_test[:,np.newaxis,:], M, axis=1)
+    x_test = np.repeat(x_test[:50,np.newaxis,:,:,:], M, axis=1)
+    y_test = np.repeat(y_test[:50,np.newaxis,:], M, axis=1)
 
     
     # Set optimizer, adapted from https://keras.io/api/optimizers/ and with
@@ -191,7 +202,11 @@ if __name__ == '__main__':
 
     model = MIMO(resnet_architecture)
     model.compile(optimizer=optimizer, metrics=[loss_tracker, accuracy, ece_tracker])
-    model.fit(x_train, y_train, batch_size=16, epochs=33, shuffle=True)
+    history = model.fit(x_train, y_train, batch_size=16, epochs=33, shuffle=True, validation_split=0.1)
+
+    plot_metric(history, 'accuracy', 'acc', 'Accuracy')
+    plot_metric(history, 'neg_likelihood', 'neg_likelihood', 'Negative Log-Likelihood')
+
     results = model.evaluate(x_test, y_test, batch_size=16)
     preds = model.predict(x_test)
 

@@ -16,3 +16,5 @@ In ResNet-X-Y, X defines the depth of the network and Y is the width multiplier,
 1. Tensorflow
 2. Numpy
 3. Robustness-metrics (source: https://github.com/google-research/robustness_metrics)
+4. Matplotlib
+5. Uncertainty Baselines (source: https://github.com/google/uncertainty-baselines)

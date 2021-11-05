@@ -102,9 +102,11 @@ class ResNet20_10():
         return Model(inputs=inputs, outputs=x)
 
 class MIMO(Model):
-    def __init__(self, mimomodel):
+    def __init__(self, mimomodel, num_batch_reps, M):
         super(MIMO, self).__init__()
         self.mimomodel = mimomodel
+        self.num_batch_reps = num_batch_reps
+        self.M = M
 
     @tf.function
     def train_step(self, data):
@@ -112,13 +114,15 @@ class MIMO(Model):
         x, y = data
 
         with tf.GradientTape() as tape:
-            logits = self.mimomodel(x, training=True)
+            inputs, targets = batch_repetition(x,y,self.M,self.num_batch_reps,training=True)
+            logits = self.mimomodel(inputs, training=True)
             trainable_vars = self.mimomodel.trainable_variables
-            loss, loss_fn = custom_loss(y, logits, trainable_vars)
+            loss, loss_fn = custom_loss(targets, logits, trainable_vars)
         gradients = tape.gradient(loss_fn, trainable_vars)
         self.optimizer.apply_gradients(zip(gradients, trainable_vars))
         loss_tracker.update_state(loss)
-        accuracy.update_state(y, logits)
+        accuracy.update_state(targets, logits)
+
         # ece_tracker.add_batch(logits, y)
         return {"neg_likelihood": loss_tracker.result(), "accuracy": accuracy.result()}
 
@@ -126,14 +130,29 @@ class MIMO(Model):
     def test_step(self, data):
         ''' Adapted from https://keras.io/guides/customizing_what_happens_in_fit/ '''
         x, y = data
-        y_pred = self(x, training=False)
-        self.compiled_loss(y, y_pred, regularization_losses=self.losses)
-        self.compiled_metrics.update_state(y, y_pred)
-        return {m.name: m.result() for m in self.metrics}
+        inputs, targets = batch_repetition(x,y,self.M,self.num_batch_reps,training=False)
+
+        y_pred = self.mimomodel(inputs, training=False)
+        y_pred = np.array(y_pred)
+
+        pred_sum = y_pred[:, 0, :].copy()
+        for i in range(1, M):
+            pred_sum += y_pred[:, i, :]
+
+        pred_avg = pred_sum / M
+
+        loss = custom_loss(targets, y_pred, False)
+        loss_tracker.update_state(loss)
+        accuracy.update_state(targets, y_pred)
+
+        return {"neg_likelihood": loss_tracker.result(), "accuracy": accuracy.result()}
 
     @property
     def metrics(self):
         return [loss_tracker, accuracy]
+
+    def call(self, inputs, *args, **kwargs):
+        return self.mimomodel(inputs)
 
 
 def custom_loss(y_true, y_pred, trainable_variables):
@@ -141,12 +160,47 @@ def custom_loss(y_true, y_pred, trainable_variables):
     negative_likelihood = tf.reduce_mean(
                 tf.reduce_sum(sparse_categorical_crossentropy(
                     y_true, y_pred, from_logits=True), axis=1))
-    lossL2 = tf.add_n([tf.nn.l2_loss(v) for v in trainable_variables if 'bias' not in v.name]) * 3e-4
+    lossL2 = 0.0
+    if trainable_variables:
+        lossL2 = tf.add_n([tf.nn.l2_loss(v) for v in trainable_variables]) * 3e-4
+    
     return negative_likelihood, negative_likelihood+lossL2
+
+def batch_repetition(x, y, ensemble_size, num_reps, training):
+    xlist = []
+    ylist = []
+
+    for i in range(ensemble_size):
+        if i == 0:
+            xlist.append(x)
+            ylist.append(y)
+        else:
+            if training:
+                idx = tf.random.shuffle(tf.range(len(y)))
+                xlist.append(tf.gather(x, idx))
+                ylist.append(tf.gather(y, idx))
+            else:
+                xlist.append(x)
+                ylist.append(y)
+
+    if num_reps >= 1:
+        inputs = tf.repeat(tf.stack(xlist, 1), repeats=num_reps, axis=0)
+        targets = tf.repeat(tf.stack(ylist, 1), repeats=num_reps, axis=0)
+    else:
+        inputs = tf.stack(xlist, 1)
+        targets = tf.stack(ylist, 1)
+
+    return inputs, targets
 
 if __name__ == '__main__':
     tf.config.run_functions_eagerly(True)
     print(tf.__version__)
+
+    M = 3
+    K = 10
+    batch_size = 32
+    num_batch_reps = 0
+    num_epochs = 10
 
     # Data handling
     (x_train, y_train), (x_test, y_test) = cifar10.load_data()
@@ -154,42 +208,39 @@ if __name__ == '__main__':
     x_test = x_test.astype('float32')
     x_train /= 255
     x_test /= 255
-    M = 3
 
-    # At train time pass random image through each node
-    x_train = np.repeat(x_train[:,np.newaxis,:,:,:], M, axis=1)
-    y_train = np.repeat(y_train[:,np.newaxis,:], M, axis=1)
+    x_train = x_train[:50,:,:,:]
+    y_train = y_train[:50,:]
+    x_test = x_test[:50,:,:,:]
+    y_test = y_test[:50,:]
 
-    idx = np.arange(x_train.shape[0])
-    shuffled_idx = np.random.permutation(x_train.shape[0])
-    x_train = x_train[shuffled_idx,:,:,:,:] 
-    y_train = y_train[shuffled_idx,:,:]
+    train_dataset = tf.data.Dataset.from_tensor_slices((x_train, y_train))
+    test_dataset = tf.data.Dataset.from_tensor_slices((x_test, y_test))
 
-    # At test time pass same image through all input nodes
-    y_test_oldshape = y_test
-    x_test = np.repeat(x_test[:,np.newaxis,:,:,:], M, axis=1)
-    y_test = np.repeat(y_test[:,np.newaxis,:], M, axis=1)
+    # During training send in randomly sampled images
+    train_dataset = train_dataset.shuffle(buffer_size=1024).batch(batch_size)
+    # During testing we send the same image to each node
+    test_dataset = test_dataset.batch(batch_size)
     
     # Set optimizer, adapted from https://keras.io/api/optimizers/ and with
     # hyperparameters described in Annex B of the original paper.
     lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
-        initial_learning_rate=1e-2, decay_steps=10000, decay_rate=0.1)
+        initial_learning_rate=1e-2, decay_steps=100000, decay_rate=0.1)
     optimizer = tf.keras.optimizers.SGD(
-        learning_rate=lr_schedule, nesterov=True)
+        learning_rate=lr_schedule, momentum=0.9, nesterov=True)
 
     # Define model and fit model
-    K = 10
-    input_shape=(x_train.shape[1:])
+    input_shape=(M,32,32,3)
 
     resnet = ResNet20_10()
     resnet_architecture = resnet.build(input_shape, K, M)
 
-    model = MIMO(resnet_architecture)
+    model = MIMO(resnet_architecture, num_batch_reps, M)
     model.compile(optimizer=optimizer)
-    model.fit(x_train, y_train, batch_size=16, epochs=33, shuffle=True)
-    results = model.evaluate(x_test, y_test, batch_size=16)
-    preds = model.predict(x_test)
+    model.fit(train_dataset, batch_size=None, epochs=num_epochs, shuffle=True)
+    results = model.evaluate(test_dataset, batch_size=None)
 
+    '''
     # Get prediction for each subnetwork and average them
     pred_sum = preds[:, 0, :].copy()
     for i in range(1, M):
@@ -199,3 +250,4 @@ if __name__ == '__main__':
 
     print('Test loss: ', results)
     print('Print test acc: ',np.sum(pred_avg.argmax(axis=1) == y_test_oldshape.flatten()) / y_test_oldshape.shape[0])
+    '''

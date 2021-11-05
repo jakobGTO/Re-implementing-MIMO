@@ -16,3 +16,8 @@ In ResNet-X-Y, X defines the depth of the network and Y is the width multiplier,
 1. Tensorflow
 2. Numpy
 3. Robustness-metrics (source: https://github.com/google-research/robustness_metrics)
+
+
+Epoch: 0 | NLL: 5.7946253 | Time per epoch: 199.031635761261
+Epoch: 1 | NLL: 5.047467 | Time per epoch: 189.9454185962677
+Epoch: 2 | NLL: 4.688809 | Time per epoch: 199.76514172554016

@@ -1,0 +1,65 @@
+#!/bin/sh
+
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+  key="$1"
+
+  case $key in
+    -d|--dataset)
+      DATASET="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    -m|--model)
+      MODEL="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    -g|--gpu)
+      GPU="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    -r|--requirements)
+      REQUIREMENTS="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    -dd|--download)
+      DOWNLOAD="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    -c|--cores)
+      CORES="$2"
+      shift # past argument
+      shift # past value
+      ;;
+    -e|--epochs)
+      EPOCHS="$2"
+      shift # past argument
+      shift # past value
+      ;;
+  esac
+
+done
+
+set -- "${POSITIONAL[@]}"
+
+if [ "$REQUIREMENTS" == "True" ]; then
+    python3 -m pip install edward2
+    python3 -m pip install librosa  
+    python3 -m pip install seqio
+    python3 -m pip install t5 
+fi
+if [ "$MODEL" != "all" ]; then
+    python3 baselines/cifar/${MODEL}.py --data_dir="/tmp/tensorflow_datasets" --output_dir="/tmp/model" --use_gpu="$GPU" --num_cores=$CORES --download_data="$DOWNLOAD" --dataset="$DATASET" --train_epochs=$EPOCHS 
+else
+    python3 baselines/cifar/batchensemble.py --data_dir="/tmp/tensorflow_datasets" --output_dir="/tmp/model" --use_gpu="$GPU" --num_cores=$CORES --download_data="$DOWNLOAD" --dataset="$DATASET" --train_epochs=$EPOCHS
+    
+    python3 baselines/cifar/dropout.py --data_dir="/tmp/tensorflow_datasets" --output_dir="/tmp/model" --use_gpu="$GPU" --num_cores=$CORES --download_data="$DOWNLOAD" --dataset="$DATASET" --train_epochs=$EPOCHS
+    
+    python3 baselines/cifar/ensemble.py --data_dir="/tmp/tensorflow_datasets" --output_dir="/tmp/model" --use_gpu="$GPU" --num_cores=$CORES --download_data="$DOWNLOAD" --dataset="$DATASET" --train_epochs=$EPOCHS
+    
+    python3 baselines/cifar/deterministic.py --data_dir="/tmp/tensorflow_datasets" --output_dir="/tmp/model" --use_gpu="$GPU" --num_cores=$CORES --download_data="$DOWNLOAD" --dataset="$DATASET" --train_epochs=$EPOCHS
+fi

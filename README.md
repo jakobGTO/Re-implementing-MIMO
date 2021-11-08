@@ -29,6 +29,7 @@ In ResNet-X-Y, X defines the depth of the network and Y is the width multiplier,
    ```
    The following parameters are currently provided:
         - dataset : "cifar100" or "cifar10"
+  
         - model : "all" (will run all pre-defined models) or write a specific one (e.g. "batchensemble" or "dropout")
         - gpu : Boolean that represents whether the process will be ran using gpu or not
         - download: If set to True it will download the required dataset to a temporary directory

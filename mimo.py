@@ -10,7 +10,10 @@ from tensorflow.python.keras.metrics import SparseCategoricalAccuracy, Mean
 from robustness_metrics.metrics.uncertainty import ExpectedCalibrationError
 
 loss_tracker = Mean(name="neg_likelihood")
+loss_tracker_normalized = Mean(name="neg_likelihood")
 accuracy = SparseCategoricalAccuracy(name="accuracy")
+totsubnet_accuracy = SparseCategoricalAccuracy(name="totsubnet_accuracy")
+totsubnet_nll = Mean(name="totsubnet_nll")
 ece_tracker = ExpectedCalibrationError(num_bins=10)
 
 class CustomLayer(Dense):
@@ -42,26 +45,26 @@ class ResNet20_10():
         """
         x_skip, x = inputs, inputs
 
-        x = BatchNormalization(momentum=0.99, epsilon=0.001)(x)
+        x = BatchNormalization(momentum=0.9, epsilon=0.00001)(x)
         x = Activation('relu')(x)
-        x = Conv2D(filters=filters, strides=(strides, strides), kernel_size=(3, 3), padding='same', use_bias=False, kernel_initializer='he_normal')(x)
-        x = BatchNormalization(momentum=0.99, epsilon=0.001)(x)
+        x = Conv2D(filters=filters, strides=(strides, strides), kernel_size=(3, 3), padding='same',kernel_initializer='he_normal')(x)
+        x = BatchNormalization(momentum=0.9, epsilon=0.00001)(x)
         x = Activation('relu')(x)
-        x = Conv2D(filters=filters, strides=(1, 1), kernel_size=(3, 3), padding='same', use_bias=False, kernel_initializer='he_normal')(x)
+        x = Conv2D(filters=filters, strides=(1, 1), kernel_size=(3, 3), padding='same', kernel_initializer='he_normal')(x)
 
-        x_skip = Conv2D(filters=filters, strides=(strides, strides), kernel_size=(1, 1), padding='same', use_bias=False, kernel_initializer='he_normal')(x_skip)
+        x_skip = Conv2D(filters=filters, strides=(strides, strides), kernel_size=(1, 1), padding='same', kernel_initializer='he_normal')(x_skip)
 
         x = Add()([x, x_skip])
 
         for i in range(3):
             x_skip, x = x, x
 
-            x = BatchNormalization(momentum=0.99, epsilon=0.001)(x)
+            x = BatchNormalization(momentum=0.9, epsilon=0.00001)(x)
             x = Activation('relu')(x)
-            x = Conv2D(filters=filters, strides=(1,1), kernel_size=(3, 3), padding='same', use_bias=False, kernel_initializer='he_normal')(x)
-            x = BatchNormalization(momentum=0.99, epsilon=0.001)(x)
+            x = Conv2D(filters=filters, strides=(1,1), kernel_size=(3, 3), padding='same', kernel_initializer='he_normal')(x)
+            x = BatchNormalization(momentum=0.9, epsilon=0.00001)(x)
             x = Activation('relu')(x)
-            x = Conv2D(filters=filters, strides=(1, 1), kernel_size=(3, 3), padding='same', use_bias=False, kernel_initializer='he_normal')(x)
+            x = Conv2D(filters=filters, strides=(1, 1), kernel_size=(3, 3), padding='same', kernel_initializer='he_normal')(x)
 
             x = Add()([x, x_skip])
 
@@ -85,7 +88,7 @@ class ResNet20_10():
         # where dim_1 = size of ensemble, dim_2 = width, dim_3 = heigh, dim_4 = channels
         x = Permute([2, 3, 4, 1])(inputs)
         x = Reshape(input_shape[1:-1] + [input_shape[-1] * M])(x)
-        x = Conv2D(filters=16, strides=(1, 1), kernel_size=(3, 3), padding='same', use_bias=False, kernel_initializer='he_normal')(x)
+        x = Conv2D(filters=16, strides=(1, 1), kernel_size=(3, 3), padding='same', kernel_initializer='he_normal')(x)
 
         # The filters are multiplied with 10 for the width multiplier
         x = self.block(x, filters=160, strides=1)
@@ -108,7 +111,7 @@ class MIMO(Model):
         self.num_batch_reps = num_batch_reps
         self.M = M
 
-    def call(self, inputs, *args, **kwargs):
+    def call(self, inputs):
         return self.mimomodel(inputs)
 
     @tf.function
@@ -136,50 +139,64 @@ class MIMO(Model):
         x, y = data
         inputs, targets = batch_repetition(x,y,self.M,self.num_batch_reps,training=False)
 
+        # Get logits
         y_pred = self.mimomodel(inputs, training=False)
-        y_pred = np.array(y_pred)
-        targets = np.array(targets)
 
-        # Calculate loss (already averaged across output nodes)
-        loss = custom_loss(targets, y_pred, False)
+        # Calculate avg loss across output nodes
+        loss, lossl2 = custom_loss(targets, y_pred, False)
+        loss_normalized, lossl2_normalized = custom_loss_normalized(targets, y_pred, False)
         loss_tracker.update_state(loss)
+        loss_tracker_normalized.update_state(loss_normalized)
 
-        # Calculate average prediction across output nodes
-        pred_sum = y_pred[:, 0, :].copy()
-        for i in range(M):
-            pred_sum += y_pred[:, i, :]
-        pred_avg = pred_sum / M
+        # Calculate ensemble preds
+        avg_pred = tf.reduce_mean(y_pred, axis=1)
 
-        # Reshape targets average prediction
+        targets = np.array(targets)
         sqz_targets = []
         for i in range(targets.shape[0]):
             sqz_targets.append(targets[i,0,0])
         sqz_targets = np.array(sqz_targets)[:,np.newaxis]
         
-        # Calculate average accuracy
-        accuracy.update_state(sqz_targets, pred_avg)
+        # Calculate ensemble accuracy
+        accuracy.update_state(sqz_targets, avg_pred)
 
+        # Calculate accuracy/loss for the subnets
+        totsubnet_accsum = 0.0
+        totsubnet_losssum = 0.0
+        for i in range(self.M):
+            totsubnet_accuracy.update_state(sqz_targets, y_pred[:,i,:])
+            totsubnet_accsum += totsubnet_accuracy.result()       
+            totsubnet_nll.update_state(sparse_categorical_crossentropy(targets[:,i,:], y_pred[:,i,:], from_logits=True))
+            totsubnet_losssum += totsubnet_nll.result()
+
+        totsubnet_accsum /= self.M
+        
         # Calculate average ece
-        probs = tf.nn.softmax(pred_avg)
-        ece_tracker.add_batch(probs, label=sqz_targets)
+        ece_tracker.add_batch(tf.nn.softmax(avg_pred), label=sqz_targets)
 
-        return {"neg_likelihood": loss_tracker.result(), "accuracy": accuracy.result(), "ece": ece_tracker.result()["ece"]}
+        return {"nll": loss_tracker.result(),"nll_normalized": loss_tracker_normalized.result(), "ensemble_accuracy": accuracy.result(), "totsubnet_acc": totsubnet_accsum, "totsubnet_nll": totsubnet_losssum,"ece": ece_tracker.result()["ece"]}
 
     @property
     def metrics(self):
         return [loss_tracker, accuracy]
 
-
 def custom_loss(y_true, y_pred, trainable_variables):
     ''' Loss function as described in Section 2 of original paper '''
-    negative_likelihood = tf.reduce_mean(
-                tf.reduce_sum(sparse_categorical_crossentropy(
-                    y_true, y_pred, from_logits=True), axis=1))
+    negative_log_likelihood = tf.reduce_mean(tf.reduce_sum(sparse_categorical_crossentropy(y_true, y_pred, from_logits=True), axis=1))
     lossL2 = 0.0
     if trainable_variables:
         lossL2 = tf.add_n([tf.nn.l2_loss(v) for v in trainable_variables]) * 3e-4
     
-    return negative_likelihood, negative_likelihood+lossL2
+    return negative_log_likelihood, negative_log_likelihood+lossL2
+
+def custom_loss_normalized(y_true, y_pred, trainable_variables):
+    ''' Loss function as described in Section 2 of original paper but normalized with logsumexp'''
+    negative_log_likelihood = tf.reduce_mean(-tf.reduce_logsumexp(-sparse_categorical_crossentropy(y_true, y_pred, from_logits=True), axis=1))
+    lossL2 = 0.0
+    if trainable_variables:
+        lossL2 = tf.add_n([tf.nn.l2_loss(v) for v in trainable_variables]) * 3e-4
+    
+    return negative_log_likelihood, negative_log_likelihood+lossL2
 
 def batch_repetition(x, y, ensemble_size, num_reps, training):
     xlist = []
@@ -208,12 +225,16 @@ def batch_repetition(x, y, ensemble_size, num_reps, training):
     return inputs, targets
 
 if __name__ == '__main__':
-    tf.config.run_functions_eagerly(True)
     print(tf.__version__)
+    tf.config.run_functions_eagerly(True)
+    config = tf.compat.v1.ConfigProto()
+    config.gpu_options.allow_growth = True
+    session = tf.compat.v1.Session(config=config)
+    tf.compat.v1.keras.backend.set_session(session)
 
-    M = 3
+    M = 2
     K = 10
-    batch_size = 32
+    batch_size = 64
     num_batch_reps = 0
     num_epochs = 10
 
@@ -224,10 +245,10 @@ if __name__ == '__main__':
     x_train /= 255
     x_test /= 255
 
-    x_train = x_train[:50,:,:,:]
-    y_train = y_train[:50,:]
-    x_test = x_test[:50,:,:,:]
-    y_test = y_test[:50,:]
+    #x_train = x_train[:50,:,:,:]
+    #y_train = y_train[:50,:]
+    #x_test = x_test[:50,:,:,:]
+    #y_test = y_test[:50,:]
 
     train_dataset = tf.data.Dataset.from_tensor_slices((x_train, y_train))
     test_dataset = tf.data.Dataset.from_tensor_slices((x_test, y_test))
@@ -252,17 +273,6 @@ if __name__ == '__main__':
 
     model = MIMO(resnet_architecture, num_batch_reps, M)
     model.compile(optimizer=optimizer)
-    model.fit(train_dataset, batch_size=None, epochs=num_epochs, shuffle=True)
+    model.fit(train_dataset, validation_data=test_dataset, epochs=num_epochs, use_multiprocessing=True, workers=4096, max_queue_size=512, validation_freq=1, batch_size=None, shuffle=False)
     results = model.evaluate(test_dataset, batch_size=None)
 
-    '''
-    # Get prediction for each subnetwork and average them
-    pred_sum = preds[:, 0, :].copy()
-    for i in range(1, M):
-        pred_sum += preds[:, i, :]
-
-    pred_avg = pred_sum / M
-
-    print('Test loss: ', results)
-    print('Print test acc: ',np.sum(pred_avg.argmax(axis=1) == y_test_oldshape.flatten()) / y_test_oldshape.shape[0])
-    '''

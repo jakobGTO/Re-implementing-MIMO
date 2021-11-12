@@ -4,7 +4,7 @@ from tensorflow.keras import Model
 from tensorflow.keras.layers import Dense, BatchNormalization, Activation, Conv2D, Add, Input, Flatten, AveragePooling2D, Reshape, Permute
 from tensorflow.keras.datasets import cifar10, cifar100
 from tensorflow.keras.utils import to_categorical
-from tensorflow.keras.losses import sparse_categorical_crossentropy
+from tensorflow.keras.losses import sparse_categorical_crossentropy, categorical_crossentropy
 import numpy as np
 from tensorflow.python.keras.metrics import SparseCategoricalAccuracy, Mean
 from robustness_metrics.metrics.uncertainty import ExpectedCalibrationError
@@ -138,9 +138,9 @@ class MIMO(Model):
         ''' Adapted from https://keras.io/guides/customizing_what_happens_in_fit/ '''
         x, y = data
         inputs, targets = batch_repetition(x,y,self.M,self.num_batch_reps,training=False)
-
         # Get logits
         y_pred = self.mimomodel(inputs, training=False)
+        probs = tf.nn.softmax(y_pred)
 
         # Calculate avg loss across output nodes
         loss, lossl2 = custom_loss(targets, y_pred, False)
@@ -149,7 +149,7 @@ class MIMO(Model):
         loss_tracker_normalized.update_state(loss_normalized)
 
         # Calculate ensemble preds
-        avg_pred = tf.reduce_mean(y_pred, axis=1)
+        avg_pred = tf.reduce_mean(probs, axis=1)
 
         targets = np.array(targets)
         sqz_targets = []
@@ -160,20 +160,24 @@ class MIMO(Model):
         # Calculate ensemble accuracy
         accuracy.update_state(sqz_targets, avg_pred)
 
-        # Calculate accuracy/loss for the subnets
-        totsubnet_accsum = 0.0
-        totsubnet_losssum = 0.0
-        for i in range(self.M):
-            totsubnet_accuracy.update_state(sqz_targets, y_pred[:,i,:])
-            totsubnet_accsum += totsubnet_accuracy.result()       
-            totsubnet_nll.update_state(sparse_categorical_crossentropy(targets[:,i,:], y_pred[:,i,:], from_logits=True))
-            totsubnet_losssum += totsubnet_nll.result()
+        # Calculate ensemble ece
+        ece_tracker.add_batch(probs, label=sqz_targets)
 
-        totsubnet_accsum /= self.M
+        totsubnet_losssum = loss_tracker.result()
+        totsubnet_accsum = accuracy.result()
+
+        # If more than 1 subnet calculate total accuracy/loss for the subnets
+        if self.M > 1:
+            totsubnet_accsum = 0.0
+            totsubnet_losssum = 0.0
+            for i in range(self.M):
+                totsubnet_accuracy.update_state(sqz_targets, probs[:,i,:])
+                totsubnet_accsum += totsubnet_accuracy.result()       
+                totsubnet_nll.update_state(sparse_categorical_crossentropy(sqz_targets, y_pred[:,i,:], from_logits=True))
+                totsubnet_losssum += totsubnet_nll.result()
+
+            totsubnet_accsum /= self.M
         
-        # Calculate average ece
-        ece_tracker.add_batch(tf.nn.softmax(avg_pred), label=sqz_targets)
-
         return {"nll": loss_tracker.result(),"nll_normalized": loss_tracker_normalized.result(), "ensemble_accuracy": accuracy.result(), "totsubnet_acc": totsubnet_accsum, "totsubnet_nll": totsubnet_losssum,"ece": ece_tracker.result()["ece"]}
 
     @property
@@ -232,23 +236,23 @@ if __name__ == '__main__':
     session = tf.compat.v1.Session(config=config)
     tf.compat.v1.keras.backend.set_session(session)
 
-    M = 2
-    K = 10
+    M = 5
+    K = 100
     batch_size = 64
     num_batch_reps = 0
-    num_epochs = 10
+    num_epochs = 20
 
     # Data handling
-    (x_train, y_train), (x_test, y_test) = cifar10.load_data()
+    (x_train, y_train), (x_test, y_test) = cifar100.load_data()
     x_train = x_train.astype('float32')
     x_test = x_test.astype('float32')
     x_train /= 255
     x_test /= 255
 
-    #x_train = x_train[:50,:,:,:]
-    #y_train = y_train[:50,:]
-    #x_test = x_test[:50,:,:,:]
-    #y_test = y_test[:50,:]
+    #x_train = x_train[:5000,:,:,:]
+    #y_train = y_train[:5000,:]
+    #x_test = x_test[:5000,:,:,:]
+    #y_test = y_test[:5000,:]
 
     train_dataset = tf.data.Dataset.from_tensor_slices((x_train, y_train))
     test_dataset = tf.data.Dataset.from_tensor_slices((x_test, y_test))
@@ -273,6 +277,6 @@ if __name__ == '__main__':
 
     model = MIMO(resnet_architecture, num_batch_reps, M)
     model.compile(optimizer=optimizer)
-    model.fit(train_dataset, validation_data=test_dataset, epochs=num_epochs, use_multiprocessing=True, workers=4096, max_queue_size=512, validation_freq=1, batch_size=None, shuffle=False)
+    model.fit(train_dataset, validation_data=test_dataset, epochs=num_epochs, use_multiprocessing=True, workers=4096, max_queue_size=512, validation_freq=1, batch_size=None, shuffle=True)
     results = model.evaluate(test_dataset, batch_size=None)
 

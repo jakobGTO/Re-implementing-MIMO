@@ -219,9 +219,12 @@ def batch_repetition(x, y, ensemble_size, num_reps, training):
                 xlist.append(x)
                 ylist.append(y)
 
-    if num_reps >= 1:
-        inputs = tf.repeat(tf.stack(xlist, 1), repeats=num_reps, axis=0)
-        targets = tf.repeat(tf.stack(ylist, 1), repeats=num_reps, axis=0)
+    if num_reps >= 2:
+        x = tf.repeat(tf.stack(xlist, 1), repeats=num_reps, axis=0)
+        y = tf.repeat(tf.stack(ylist, 1), repeats=num_reps, axis=0)
+        idx = tf.random.shuffle(tf.range(len(y)))
+        inputs = tf.gather(x, idx)
+        targets = tf.gather(y, idx)
     else:
         inputs = tf.stack(xlist, 1)
         targets = tf.stack(ylist, 1)
@@ -236,14 +239,14 @@ if __name__ == '__main__':
     session = tf.compat.v1.Session(config=config)
     tf.compat.v1.keras.backend.set_session(session)
 
-    M = 5
-    K = 100
-    batch_size = 64
-    num_batch_reps = 0
+    M = 4
+    K = 10
+    batch_size = 32
+    num_batch_reps = 3
     num_epochs = 20
 
     # Data handling
-    (x_train, y_train), (x_test, y_test) = cifar100.load_data()
+    (x_train, y_train), (x_test, y_test) = cifar10.load_data()
     x_train = x_train.astype('float32')
     x_test = x_test.astype('float32')
     x_train /= 255

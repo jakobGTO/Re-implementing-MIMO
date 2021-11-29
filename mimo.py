@@ -1,5 +1,6 @@
 from os import name
 import tensorflow as tf
+import math
 from tensorflow.keras import Model
 from tensorflow.keras.layers import Dense, BatchNormalization, Activation, Conv2D, Add, Input, Flatten, AveragePooling2D, Reshape, Permute
 from tensorflow.keras.datasets import cifar10, cifar100
@@ -7,6 +8,8 @@ from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.losses import sparse_categorical_crossentropy, categorical_crossentropy
 import numpy as np
 from tensorflow.python.keras.metrics import SparseCategoricalAccuracy, Mean
+#from tensorflow.python.keras.optimizer_v2.learning_rate_schedule import LearningRateSchedule
+from tensorflow.keras.callbacks import LearningRateScheduler
 from robustness_metrics.metrics.uncertainty import ExpectedCalibrationError
 
 loss_tracker = Mean(name="neg_likelihood")
@@ -45,26 +48,26 @@ class ResNet20_10():
         """
         x_skip, x = inputs, inputs
 
-        x = BatchNormalization(momentum=0.9, epsilon=0.00001)(x)
+        x = BatchNormalization()(x)
         x = Activation('relu')(x)
-        x = Conv2D(filters=filters, strides=(strides, strides), kernel_size=(3, 3), padding='same',kernel_initializer='he_normal')(x)
-        x = BatchNormalization(momentum=0.9, epsilon=0.00001)(x)
+        x = Conv2D(filters=filters, strides=(strides, strides), kernel_size=(3, 3), use_bias=False, padding='same',kernel_initializer='he_normal')(x)
+        x = BatchNormalization()(x)
         x = Activation('relu')(x)
-        x = Conv2D(filters=filters, strides=(1, 1), kernel_size=(3, 3), padding='same', kernel_initializer='he_normal')(x)
+        x = Conv2D(filters=filters, strides=(1, 1), kernel_size=(3, 3), use_bias=False, padding='same', kernel_initializer='he_normal')(x)
 
-        x_skip = Conv2D(filters=filters, strides=(strides, strides), kernel_size=(1, 1), padding='same', kernel_initializer='he_normal')(x_skip)
+        x_skip = Conv2D(filters=filters, strides=(strides, strides), use_bias=False, kernel_size=(1, 1), padding='same', kernel_initializer='he_normal')(x_skip)
 
         x = Add()([x, x_skip])
 
         for i in range(3):
             x_skip, x = x, x
 
-            x = BatchNormalization(momentum=0.9, epsilon=0.00001)(x)
+            x = BatchNormalization()(x)
             x = Activation('relu')(x)
-            x = Conv2D(filters=filters, strides=(1,1), kernel_size=(3, 3), padding='same', kernel_initializer='he_normal')(x)
-            x = BatchNormalization(momentum=0.9, epsilon=0.00001)(x)
+            x = Conv2D(filters=filters, strides=(1,1), kernel_size=(3, 3), use_bias=False, padding='same', kernel_initializer='he_normal')(x)
+            x = BatchNormalization()(x)
             x = Activation('relu')(x)
-            x = Conv2D(filters=filters, strides=(1, 1), kernel_size=(3, 3), padding='same', kernel_initializer='he_normal')(x)
+            x = Conv2D(filters=filters, strides=(1, 1), kernel_size=(3, 3), use_bias=False, padding='same', kernel_initializer='he_normal')(x)
 
             x = Add()([x, x_skip])
 
@@ -88,7 +91,7 @@ class ResNet20_10():
         # where dim_1 = size of ensemble, dim_2 = width, dim_3 = heigh, dim_4 = channels
         x = Permute([2, 3, 4, 1])(inputs)
         x = Reshape(input_shape[1:-1] + [input_shape[-1] * M])(x)
-        x = Conv2D(filters=16, strides=(1, 1), kernel_size=(3, 3), padding='same', kernel_initializer='he_normal')(x)
+        x = Conv2D(filters=16, strides=(1, 1), kernel_size=(3, 3), use_bias=False, padding='same', kernel_initializer='he_normal')(x)
 
         # The filters are multiplied with 10 for the width multiplier
         x = self.block(x, filters=160, strides=1)
@@ -137,7 +140,11 @@ class MIMO(Model):
     def test_step(self, data):
         ''' Adapted from https://keras.io/guides/customizing_what_happens_in_fit/ '''
         x, y = data
-        inputs, targets = batch_repetition(x,y,self.M,self.num_batch_reps,training=False)
+
+        inputs = tf.tile(tf.expand_dims(x, 1),[1, self.M, 1, 1, 1])
+        targets = tf.tile(tf.expand_dims(y, 1), [1, self.M, 1])
+        #inputs, targets = batch_repetition(x,y,self.M,self.num_batch_reps,training=False)
+
         # Get logits
         y_pred = self.mimomodel(inputs, training=False)
         probs = tf.nn.softmax(y_pred)
@@ -150,7 +157,7 @@ class MIMO(Model):
 
         # Calculate ensemble preds
         avg_pred = tf.reduce_mean(probs, axis=1)
-
+        
         targets = np.array(targets)
         sqz_targets = []
         for i in range(targets.shape[0]):
@@ -189,7 +196,7 @@ def custom_loss(y_true, y_pred, trainable_variables):
     negative_log_likelihood = tf.reduce_mean(tf.reduce_sum(sparse_categorical_crossentropy(y_true, y_pred, from_logits=True), axis=1))
     lossL2 = 0.0
     if trainable_variables:
-        lossL2 = tf.add_n([tf.nn.l2_loss(v) for v in trainable_variables]) * 3e-4
+        lossL2 = tf.add_n([tf.nn.l2_loss(v) for v in trainable_variables if 'kernel' in v.name or 'batch_norm' in v.name or 'bias' in v.name]) * 3e-4
     
     return negative_log_likelihood, negative_log_likelihood+lossL2
 
@@ -231,6 +238,16 @@ def batch_repetition(x, y, ensemble_size, num_reps, training):
 
     return inputs, targets
 
+def step_decay(init_lr):
+    def schedule(epoch):
+        initial_lrate = init_lr
+        drop = 0.1
+        epochs_drop = 25.0
+        lrate = initial_lrate * math.pow(drop,  
+                math.floor((1+epoch)/epochs_drop))
+        return lrate
+    return LearningRateScheduler(schedule)
+
 if __name__ == '__main__':
     print(tf.__version__)
     tf.config.run_functions_eagerly(True)
@@ -239,47 +256,40 @@ if __name__ == '__main__':
     session = tf.compat.v1.Session(config=config)
     tf.compat.v1.keras.backend.set_session(session)
 
-    M = 4
-    K = 10
+    M = 3
+    K = 100
     batch_size = 32
-    num_batch_reps = 3
-    num_epochs = 20
+    num_batch_reps = 0
+    num_epochs = 100
 
     # Data handling
-    (x_train, y_train), (x_test, y_test) = cifar10.load_data()
+    (x_train, y_train), (x_test, y_test) = cifar100.load_data()
     x_train = x_train.astype('float32')
     x_test = x_test.astype('float32')
+
     x_train /= 255
     x_test /= 255
-
-    #x_train = x_train[:5000,:,:,:]
-    #y_train = y_train[:5000,:]
-    #x_test = x_test[:5000,:,:,:]
-    #y_test = y_test[:5000,:]
 
     train_dataset = tf.data.Dataset.from_tensor_slices((x_train, y_train))
     test_dataset = tf.data.Dataset.from_tensor_slices((x_test, y_test))
 
     # During training send in randomly sampled images
-    train_dataset = train_dataset.shuffle(buffer_size=1024).batch(batch_size)
+    train_dataset = train_dataset.shuffle(buffer_size=10296).batch(batch_size)
     # During testing we send the same image to each node
     test_dataset = test_dataset.batch(batch_size)
     
     # Set optimizer, adapted from https://keras.io/api/optimizers/ and with
     # hyperparameters described in Annex B of the original paper.
-    lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
-        initial_learning_rate=1e-2, decay_steps=100000, decay_rate=0.1)
-    optimizer = tf.keras.optimizers.SGD(
-        learning_rate=lr_schedule, momentum=0.9, nesterov=True)
+    lr_schedule = step_decay(init_lr=0.1)
+    optimizer = tf.keras.optimizers.SGD(momentum=0.9, nesterov=True)
 
     # Define model and fit model
     input_shape=(M,32,32,3)
 
     resnet = ResNet20_10()
     resnet_architecture = resnet.build(input_shape, K, M)
-
     model = MIMO(resnet_architecture, num_batch_reps, M)
     model.compile(optimizer=optimizer)
-    model.fit(train_dataset, validation_data=test_dataset, epochs=num_epochs, use_multiprocessing=True, workers=4096, max_queue_size=512, validation_freq=1, batch_size=None, shuffle=True)
+    model.fit(train_dataset, validation_data=test_dataset, callbacks=[lr_schedule],epochs=num_epochs, use_multiprocessing=True, workers=4096, max_queue_size=512, validation_freq=1, batch_size=None, shuffle=False)
     results = model.evaluate(test_dataset, batch_size=None)
 

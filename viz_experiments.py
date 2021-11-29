@@ -19,8 +19,9 @@ def plot_fig5(data, dataname):
     plt.ylabel('Accuracy')
     plt.title('Test Accuracy (%) on ' + dataname)
     plt.legend()
+    plt.savefig('figs/fig5_acc_' + dataname + '.png')
+
     plt.show()
-    plt.savefig('figs/fig5_acc_' + dataname)
 
     plt.plot(x, -nll, marker='o' ,label = "Ensemble")
     plt.plot(x, -totsubnet_nll, linestyle='--', marker='o', label = "Subnetworks")
@@ -28,8 +29,9 @@ def plot_fig5(data, dataname):
     plt.ylabel('Likelihood')
     plt.title('Test Log-likelihood on ' + dataname)
     plt.legend()
+    plt.savefig('figs/fig5_likelihood' + dataname + '.png')
+
     plt.show()
-    plt.savefig('figs/fig5_likelihood' + dataname)
 
     return None
 
@@ -59,9 +61,8 @@ def plot_fig6(data):
 
     for patch, color in zip(boxplot['boxes'], colors):
         patch.set_facecolor(color)
-
+    plt.savefig('figs/fig6_acc_Cifar10.png')
     plt.show()
-    plt.savefig('figs/fig6_acc_Cifar10')
 
     # Log lik
     data1 = [-reps_1.iloc[0][2], -reps_1.iloc[1][2], -reps_1.iloc[2][2]]
@@ -80,9 +81,8 @@ def plot_fig6(data):
 
     for patch, color in zip(boxplot['boxes'], colors):
         patch.set_facecolor(color)
-
+    plt.savefig('figs/fig6_loglikelihood_Cifar10.png')
     plt.show()
-    plt.savefig('figs/fig6_loglikelihood_Cifar10')
 
     return None
 

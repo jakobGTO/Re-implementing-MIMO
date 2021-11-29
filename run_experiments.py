@@ -5,8 +5,7 @@ import json
 def fig5_exp(train_dataset, test_dataset, K, batch_size, num_epochs, num_batch_reps):
     res_list = []
     for M in range(1,6):
-        lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
-            initial_learning_rate=1e-2, decay_steps=100000, decay_rate=0.1)
+        lr_schedule = LearningRateScheduler(step_decay)
         optimizer = tf.keras.optimizers.SGD(
             learning_rate=lr_schedule, momentum=0.9, nesterov=True)
 
@@ -46,8 +45,7 @@ def fig6_exp(num_epochs):
             # During testing we send the same image to each node
             testx = test_dataset.batch(bs)
 
-            lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
-            initial_learning_rate=lr, decay_steps=100000, decay_rate=0.1)
+            lr_schedule = step_decay(init_lr=lr)
             optimizer = tf.keras.optimizers.SGD(
                 learning_rate=lr_schedule, momentum=0.9, nesterov=True)
 

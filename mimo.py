@@ -8,12 +8,10 @@ from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.losses import sparse_categorical_crossentropy, categorical_crossentropy
 import numpy as np
 from tensorflow.python.keras.metrics import SparseCategoricalAccuracy, Mean
-#from tensorflow.python.keras.optimizer_v2.learning_rate_schedule import LearningRateSchedule
 from tensorflow.keras.callbacks import LearningRateScheduler
 from robustness_metrics.metrics.uncertainty import ExpectedCalibrationError
 
 loss_tracker = Mean(name="neg_likelihood")
-loss_tracker_normalized = Mean(name="neg_likelihood")
 accuracy = SparseCategoricalAccuracy(name="accuracy")
 totsubnet_accuracy = SparseCategoricalAccuracy(name="totsubnet_accuracy")
 totsubnet_nll = Mean(name="totsubnet_nll")
@@ -151,9 +149,7 @@ class MIMO(Model):
 
         # Calculate avg loss across output nodes
         loss, lossl2 = custom_loss(targets, y_pred, False)
-        loss_normalized, lossl2_normalized = custom_loss_normalized(targets, y_pred, False)
         loss_tracker.update_state(loss)
-        loss_tracker_normalized.update_state(loss_normalized)
 
         # Calculate ensemble preds
         avg_pred = tf.reduce_mean(probs, axis=1)
@@ -185,7 +181,7 @@ class MIMO(Model):
 
             totsubnet_accsum /= self.M
         
-        return {"nll": loss_tracker.result(),"nll_normalized": loss_tracker_normalized.result(), "ensemble_accuracy": accuracy.result(), "totsubnet_acc": totsubnet_accsum, "totsubnet_nll": totsubnet_losssum,"ece": ece_tracker.result()["ece"]}
+        return {"nll": loss_tracker.result(), "ensemble_accuracy": accuracy.result(), "totsubnet_acc": totsubnet_accsum, "totsubnet_nll": totsubnet_losssum,"ece": ece_tracker.result()["ece"]}
 
     @property
     def metrics(self):
@@ -197,15 +193,6 @@ def custom_loss(y_true, y_pred, trainable_variables):
     lossL2 = 0.0
     if trainable_variables:
         lossL2 = tf.add_n([tf.nn.l2_loss(v) for v in trainable_variables if 'kernel' in v.name or 'batch_norm' in v.name or 'bias' in v.name]) * 3e-4
-    
-    return negative_log_likelihood, negative_log_likelihood+lossL2
-
-def custom_loss_normalized(y_true, y_pred, trainable_variables):
-    ''' Loss function as described in Section 2 of original paper but normalized with logsumexp'''
-    negative_log_likelihood = tf.reduce_mean(-tf.reduce_logsumexp(-sparse_categorical_crossentropy(y_true, y_pred, from_logits=True), axis=1))
-    lossL2 = 0.0
-    if trainable_variables:
-        lossL2 = tf.add_n([tf.nn.l2_loss(v) for v in trainable_variables]) * 3e-4
     
     return negative_log_likelihood, negative_log_likelihood+lossL2
 

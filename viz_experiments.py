@@ -3,8 +3,6 @@ import pandas as pd
 import json
 import matplotlib.pyplot as plt
 
-
-
 def plot_fig5(data, dataname):
     #ece, ens_acc, nll, nll_norm, totsubnet_acc, totsubnet_nll
     nll = data[:5,2]

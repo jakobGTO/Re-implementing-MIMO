@@ -25,7 +25,7 @@ class CustomLayer(Dense):
 
     def call(self, inputs):
         x = super().call(inputs)
-        x = tf.reshape(x, (tf.shape(inputs)[0], self.M, self.units // self.M))
+        x = tf.reshape(x, (tf.shape(inputs)[0], self.M, int(np.floor(self.units / self.M))))
         return x
 
 class ResNet20_10():
@@ -141,7 +141,6 @@ class MIMO(Model):
 
         inputs = tf.tile(tf.expand_dims(x, 1),[1, self.M, 1, 1, 1])
         targets = tf.tile(tf.expand_dims(y, 1), [1, self.M, 1])
-        #inputs, targets = batch_repetition(x,y,self.M,self.num_batch_reps,training=False)
 
         # Get logits
         y_pred = self.mimomodel(inputs, training=False)
@@ -243,6 +242,7 @@ if __name__ == '__main__':
     session = tf.compat.v1.Session(config=config)
     tf.compat.v1.keras.backend.set_session(session)
 
+    # Hyperparam settings
     M = 3
     K = 100
     batch_size = 32
